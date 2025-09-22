@@ -18,7 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-// #include "lora.h"
+#include "lora.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -98,6 +98,12 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  uint8_t chip_id;
+
+  lora_get_device_id( &chip_id );
+
+  uint8_t test = chip_id;
+
   while (1)
   {
     /* USER CODE END WHILE */

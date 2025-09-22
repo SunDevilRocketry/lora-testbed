@@ -57,7 +57,6 @@ Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_exti.c \
 Core/Src/system_stm32f1xx.c \
 Core/Src/sysmem.c \
 Core/Src/syscalls.c \
-# $(MOD_DIR)/led/led.c \
 $(MOD_DIR)/lora/lora.c	
 
 
@@ -127,7 +126,6 @@ C_INCLUDES =  \
 -IDrivers/STM32F1xx_HAL_Driver/Inc/Legacy \
 -IDrivers/CMSIS/Device/ST/STM32F1xx/Include \
 -IDrivers/CMSIS/Include \
-# -I$(MOD_DIR)/led \
 -I$(MOD_DIR)/lora \
 
 
