@@ -31,6 +31,9 @@ OPT = -Og
 # Build path
 BUILD_DIR = build
 
+# Module Path
+MOD_DIR = ./mod
+
 ######################################
 # source
 ######################################
@@ -53,7 +56,10 @@ Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_flash_ex.c \
 Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_exti.c \
 Core/Src/system_stm32f1xx.c \
 Core/Src/sysmem.c \
-Core/Src/syscalls.c
+Core/Src/syscalls.c \
+# $(MOD_DIR)/led/led.c \
+$(MOD_DIR)/lora/lora.c	
+
 
 # ASM sources
 ASM_SOURCES =  \
@@ -120,7 +126,9 @@ C_INCLUDES =  \
 -IDrivers/STM32F1xx_HAL_Driver/Inc \
 -IDrivers/STM32F1xx_HAL_Driver/Inc/Legacy \
 -IDrivers/CMSIS/Device/ST/STM32F1xx/Include \
--IDrivers/CMSIS/Include
+-IDrivers/CMSIS/Include \
+# -I$(MOD_DIR)/led \
+-I$(MOD_DIR)/lora \
 
 
 # compile gcc flags
