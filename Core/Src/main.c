@@ -91,6 +91,8 @@ int main(void)
   MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
 
+  // NOTE: INITIALIZE DRIVERS SETUPS HERE
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -100,6 +102,11 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    // NOTE: WRITE YOUR APPLICATION CODE HERE
+    HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 0);
+    HAL_Delay(500);
+    HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
+    HAL_Delay(500);
   }
   /* USER CODE END 3 */
 }
