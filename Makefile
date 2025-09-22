@@ -194,7 +194,7 @@ clean:
 	-rm -fR $(BUILD_DIR)
   
 flash:
-	
+	st-flash write $(BUILD_DIR)/$(TARGET).bin 0x08000000
 
 #######################################
 # dependencies
