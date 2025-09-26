@@ -57,6 +57,21 @@ static void MX_SPI1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+void lora_receive_test(){
+    LORA_STATUS lora_status = LORA_OK;
+    uint8_t buffer[64];
+    uint8_t len_output = 0;
+
+    lora_status = lora_receive(buffer, &len_output);
+    
+}
+
+void lora_transmit_test(){
+    uint8_t sample[] = {1,2,3,4,5,6,7,8,9,10};
+    LORA_STATUS lora_status = LORA_OK;
+    lora_status = lora_transmit(sample, 10);  
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -130,7 +145,6 @@ int main(void)
   LORA_STATUS read_status5 = lora_read_register( LORA_REG_FREQ_MSD, &freq_reg );
   LORA_STATUS read_status6 = lora_read_register( LORA_REG_FREQ_LSB, &freq_reg );
 
-  uint8_t sample[] = {1,2,3,4,5,6,7,8,9,10};
 
   /*------------------------------------------------------------------------------
   Event Loop                                                                  
