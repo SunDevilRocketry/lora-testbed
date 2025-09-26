@@ -88,6 +88,7 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_SPI1_Init();
+  LORA_SPI_Init	  ();	/* LORA		 */
   /* USER CODE BEGIN 2 */
 
   // NOTE: INITIALIZE DRIVERS SETUPS HERE
@@ -97,26 +98,104 @@ int main(void)
 
   uint8_t test = chip_id;
 
+  /* Testing Purposes */
+  lora_reset();
+
+  LORA_CONFIG lora_config = {
+    LORA_SLEEP_MODE,
+    LORA_SPREAD_12,
+    LORA_BANDWIDTH_125_KHZ,
+    LORA_ECR_4_5,
+    LORA_IMPLICIT_HEADER,
+    915
+  };
+
+  uint8_t device_id = 0;
+
+  LORA_STATUS lora_status = LORA_OK;
+
+  lora_status = lora_init(&lora_config);
+
+  // /* Testing Purpose */
+  // uint8_t operation_mode_register;
+  // LORA_STATUS read_status1 = lora_read_register( LORA_REG_OPERATION_MODE, &operation_mode_register );
+
+  // uint8_t modem_config1_register;
+  // LORA_STATUS read_status2 = lora_read_register( LORA_REG_NUM_RX_BYTES, &modem_config1_register );
+
+  // uint8_t modem_config2_register;
+  // LORA_STATUS read_status3 = lora_read_register( LORA_REG_RX_HEADER_INFO, &modem_config2_register );
+
+  // uint8_t freq_reg;
+  // LORA_STATUS read_status4 = lora_read_register( LORA_REG_FREQ_MSB, &freq_reg );
+  // LORA_STATUS read_status5 = lora_read_register( LORA_REG_FREQ_MSD, &freq_reg );
+  // LORA_STATUS read_status6 = lora_read_register( LORA_REG_FREQ_LSB, &freq_reg );
+
+  uint8_t sample[] = {1,2,3,4,5,6,7,8,9,10};
 
 
-  /* USER CODE END 2 */
 
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-
+  /*------------------------------------------------------------------------------
+  Event Loop                                                                  
+  ------------------------------------------------------------------------------*/
   while (1)
-  {
-    /* USER CODE END WHILE */
+    {
+    lora_status = lora_transmit(sample, 10);
+    /* Receive byte from USB port */
+    usb_status = usb_receive( &usb_rx_byte         , 
+                                sizeof( uint8_t ), 
+                                200 );
 
-    /* USER CODE BEGIN 3 */
-    // NOTE: WRITE YOUR APPLICATION CODE HERE
-    HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 0);
-    HAL_Delay(500);
-    HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
-    HAL_Delay(500);
-  }
-  /* USER CODE END 3 */
-}
+    if ( usb_status == USB_OK )
+    {
+      switch ( usb_rx_byte )
+        {
+        /*-------------------------------------------------------------
+          CONNECT_OP	
+        -------------------------------------------------------------*/
+          case CONNECT_OP:
+            {
+            led_set_color(LED_YELLOW);
+            /* Send board identifying code    */
+            ping();
+
+            /* Send firmware identifying code */
+            usb_transmit( &firmware_code   , 
+                  sizeof( uint8_t ), 
+                  HAL_DEFAULT_TIMEOUT );
+            break;
+            } /* CONNECT_OP */
+          /*-------------------------------------------------------------
+            Unrecognized command code  
+          -------------------------------------------------------------*/
+          default:
+            {
+            //Error_Handler();
+            break;
+            }
+
+          } /* switch( usb_rx_data ) */
+        } /* if ( usb_status != USB_OK ) */
+      } /* main */
+    }
+
+    /* USER CODE END 2 */
+
+    /* Infinite loop */
+    /* USER CODE BEGIN WHILE */
+
+    while (1)
+    {
+      /* USER CODE END WHILE */
+
+      /* USER CODE BEGIN 3 */
+      // NOTE: WRITE YOUR APPLICATION CODE HERE
+      HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 0);
+      HAL_Delay(500);
+      HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
+      HAL_Delay(500);
+    }
+    /* USER CODE END 3 */
 
 /**
   * @brief System Clock Configuration
