@@ -22,6 +22,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "usbd_cdc_if.h"
 #include "lora.h"
 
 /* USER CODE END Includes */
@@ -59,13 +60,27 @@ static void MX_SPI1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+void serial_print(unsigned char* mesg, size_t mesg_len){
+    CDC_Transmit_FS(mesg, mesg_len);
+}
+
+void serial_println(unsigned char* mesg, size_t mesg_len){
+    CDC_Transmit_FS(mesg, mesg_len);
+    CDC_Transmit_FS("\n",2);
+}
+
 void lora_receive_test(){
     LORA_STATUS lora_status = LORA_OK;
     uint8_t buffer[64];
     uint8_t len_output = 0;
 
     lora_status = lora_receive(buffer, &len_output);
-    
+    if (len_output != 0){
+      serial_print("Buffer size: ", 14);
+      serial_println(len_output, sizeof(uint8_t));
+      serial_print("Data: ", 7);
+      serial_println(buffer, len_output);
+    }
 }
 
 void lora_transmit_test(){
