@@ -121,6 +121,7 @@ int main(void)
     LORA_BANDWIDTH_125_KHZ,
     LORA_ECR_4_5,
     LORA_IMPLICIT_HEADER,
+    LORA_PA_BOOST,
     915
   };
 
@@ -149,6 +150,7 @@ int main(void)
   /*------------------------------------------------------------------------------
   Event Loop                                                                  
   ------------------------------------------------------------------------------*/
+  uint8_t sample[] = {1,2,3,4,5,6,7,8,9,10};
   while (1)
     {
       /* USER CODE END WHILE */
