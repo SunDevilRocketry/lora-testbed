@@ -24,7 +24,8 @@
 /* USER CODE BEGIN Includes */
 #include "usbd_cdc_if.h"
 #include "lora.h"
-
+#include <stdlib.h>
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -61,27 +62,40 @@ static void MX_SPI1_Init(void);
 /* USER CODE BEGIN 0 */
 
 void serial_print(unsigned char* mesg, size_t mesg_len){
-    CDC_Transmit_FS(mesg, mesg_len);
+  while(CDC_Transmit_FS(mesg, mesg_len)==USBD_BUSY);
 }
 
 void serial_println(unsigned char* mesg, size_t mesg_len){
-    CDC_Transmit_FS(mesg, mesg_len);
-    CDC_Transmit_FS("\n",2);
+    while(CDC_Transmit_FS(mesg, mesg_len)==USBD_BUSY);
 }
 
+int counter = 0;
 void lora_receive_test(){
     LORA_STATUS lora_status = LORA_OK;
     uint8_t buffer[64];
     uint8_t len_output = 0;
 
     lora_status = lora_receive(buffer, &len_output);
-    if (len_output != 0){
-      serial_print("Buffer size: ", 14);
-      serial_println(len_output, sizeof(uint8_t));
-      serial_print("Data: ", 7);
-      serial_println(buffer, len_output);
+
+    if (counter % 15 == 0){
+      serial_println("Waiting: \r\n", 11);
     }
+
+    if (len_output != 0){
+      char buf[255];   
+      char buf2[16];   
+      int len = sprintf(buf, "Buffer Size: %d\r\n", (int) len_output);
+      serial_print(buf, len);
+
+      for (int i = 0; i < (int) len_output; i++){
+        int data_len = sprintf(buf2, "%d ", (int) buffer[i]);
+        serial_print(buf2, data_len);
+      }
+      serial_println("\r\n Done \r\n", 11);
+    }
+    counter++;
 }
+
 
 void lora_transmit_test(){
     uint8_t sample[] = {1,2,3,4,5,6,7,8,9,10};
