@@ -67,9 +67,13 @@ void lora_receive_test(){
 }
 
 void lora_transmit_test(){
-    uint8_t sample[] = {1,2,3,4,5,6,7,8,9,10};
+    uint8_t sample[] = {42,42,42,42,42,42,42,42,42,42};
     LORA_STATUS lora_status = LORA_OK;
-    lora_status = lora_transmit(sample, 10);  
+    lora_status = lora_transmit(sample, 10);
+
+    uint8_t sample2[] = {255,255,255,42,42,42,42,42,42,42};
+    lora_status = LORA_OK;
+    lora_status = lora_transmit(sample2, 8);  
 }
 
 /* USER CODE END 0 */
@@ -120,9 +124,9 @@ int main(void)
     LORA_SPREAD_12,
     LORA_BANDWIDTH_125_KHZ,
     LORA_ECR_4_5,
-    LORA_IMPLICIT_HEADER,
+    LORA_EXPLICIT_HEADER,
     LORA_PA_BOOST,
-    915
+    915000
   };
 
   uint8_t device_id = 0;
@@ -156,11 +160,11 @@ int main(void)
       /* USER CODE END WHILE */
       /* USER CODE BEGIN 3 */
       // NOTE: WRITE YOUR APPLICATION CODE HERE
-      lora_status = lora_transmit(sample, 10);
+      lora_transmit_test();
       HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 0);
       HAL_Delay(250);
       HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
-      HAL_Delay(250);
+      HAL_Delay(10000);
     }
     /* USER CODE END 3 */
 
