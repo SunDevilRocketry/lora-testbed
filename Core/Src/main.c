@@ -169,7 +169,7 @@ int main(void)
     LORA_ECR_4_5,
     LORA_EXPLICIT_HEADER,
     LORA_PA_BOOST,
-    915
+    915000
   };
 
   uint8_t device_id = 0;
