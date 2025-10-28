@@ -75,13 +75,28 @@ void lora_receive_test(){
     uint8_t buffer[64];
     uint8_t len_output = 0;
 
+    LORA_STATUS ready = LORA_FAIL;
+
+    while( ready != LORA_OK ) {
+      ready = lora_receive_ready();
+
+      char bufx[255];
+      int len = sprintf( bufx, "Ready: %d\n", ready);
+      serial_println( bufx, len );
+    }
+
     lora_status = lora_receive(buffer, &len_output);
 
     if (counter % 15 == 0){
       serial_println("Waiting: \r\n", 11);
     }
 
-    if (len_output != 0){
+    char buf3[255];
+    int len = sprintf( buf3, "Status: %d\n", lora_status);
+
+    serial_println(buf3, len );
+
+    /* if (len_output != 0){ */ if( lora_status == LORA_OK ){
       char buf[255];   
       char buf2[16];   
       int len = sprintf(buf, "Buffer Size: %d\r\n", (int) len_output);
@@ -148,11 +163,12 @@ int main(void)
   lora_reset();
 
   LORA_CONFIG lora_config = {
-    LORA_SLEEP_MODE,
+    LORA_RX_CONTINUOUS_MODE,
     LORA_SPREAD_12,
     LORA_BANDWIDTH_125_KHZ,
     LORA_ECR_4_5,
-    LORA_IMPLICIT_HEADER,
+    LORA_EXPLICIT_HEADER,
+    LORA_PA_BOOST,
     915
   };
 
