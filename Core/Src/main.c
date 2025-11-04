@@ -75,9 +75,9 @@ void lora_receive_test(){
     uint8_t buffer[64];
     uint8_t len_output = 0;
 
-    LORA_STATUS ready = LORA_FAIL;
+    LORA_STATUS ready = LORA_WAITING;
 
-    while( ready != LORA_OK ) {
+    while( ready != LORA_READY ) {
       ready = lora_receive_ready();
 
       char bufx[255];
@@ -178,6 +178,10 @@ int main(void)
 
   lora_status = lora_init(&lora_config);
 
+  if( lora_status == LORA_OK ) {
+    HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
+  }
+
   /* Testing Purpose */
   uint8_t operation_mode_register;
   LORA_STATUS read_status1 = lora_read_register( LORA_REG_OPERATION_MODE, &operation_mode_register );
@@ -188,10 +192,16 @@ int main(void)
   uint8_t modem_config2_register;
   LORA_STATUS read_status3 = lora_read_register( LORA_REG_RX_HEADER_INFO, &modem_config2_register );
 
-  uint8_t freq_reg;
-  LORA_STATUS read_status4 = lora_read_register( LORA_REG_FREQ_MSB, &freq_reg );
-  LORA_STATUS read_status5 = lora_read_register( LORA_REG_FREQ_MSD, &freq_reg );
-  LORA_STATUS read_status6 = lora_read_register( LORA_REG_FREQ_LSB, &freq_reg );
+  uint8_t freq_reg1;
+  uint8_t freq_reg2;
+  uint8_t freq_reg3;
+  LORA_STATUS read_status4 = lora_read_register( LORA_REG_FREQ_MSB, &freq_reg1 );
+  LORA_STATUS read_status5 = lora_read_register( LORA_REG_FREQ_MSD, &freq_reg2 );
+  LORA_STATUS read_status6 = lora_read_register( LORA_REG_FREQ_LSB, &freq_reg3 );
+
+  if( freq_reg1 + freq_reg2 + freq_reg3 == 0 ) { // This is literally just so I have a breakpoint to check
+    HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
+  }
 
   /* USER CODE END 2 */
 
