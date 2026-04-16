@@ -80,17 +80,20 @@ USB_STATUS usb_receive_IT( void* data, size_t len ) {
     return USB_OK;
 }
 
+// ETS Temp: timeout is currently ignored
 USB_STATUS usb_receive( void* data, size_t len, uint32_t timeout ) {
     // does nothing for now; stub
     return USB_OK;
 }
 
 USB_STATUS usb_transmit( void* data, size_t len, uint32_t timeout ) {
-    while(CDC_Transmit_FS(data, len)==USBD_BUSY);
+    uint32_t timeout_start = HAL_GetTick();
+    while(CDC_Transmit_FS((uint8_t*)data, len)==USBD_BUSY && (HAL_GetTick() - timeout_start) < timeout);
     return USB_OK;
 }
 
 USB_STATUS usb_transmit_IT( void* data, size_t len ) {
+    CDC_Transmit_FS((uint8_t*)data, len);
     return USB_OK;
 }
 
