@@ -21,7 +21,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "lora.h"
-
+#include "telemetry.h"
+#include "error_sdr.h"
+#include "usb.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -43,6 +45,17 @@
 SPI_HandleTypeDef hspi1;
 
 /* USER CODE BEGIN PV */
+/* USB data buffer */
+uint8_t usb_tx_byte[ USB_BUF_SIZE ];
+uint8_t usb_rx_byte[ USB_BUF_SIZE ];
+
+/* LoRa global receive buffer */
+LORA_STATUS lora_status;
+LORA_MESSAGE last_lora_message;
+bool start_lora = false;
+
+/* LoRa config settings */
+LORA_PRESET lora_preset;
 
 /* USER CODE END PV */
 
@@ -57,23 +70,14 @@ static void MX_SPI1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-void lora_receive_test(){
-    LORA_STATUS lora_status = LORA_OK;
-    uint8_t buffer[64];
-    uint8_t len_output = 0;
-
-    lora_status = lora_receive(buffer, &len_output);
-    
+USB_STATUS usb_receive_IT( void* data, size_t len ) {
+    // does nothing for now; stub
+    return USB_OK;
 }
 
-void lora_transmit_test(){
-    uint8_t sample[] = {42,42,42,42,42,42,42,42,42,42};
-    LORA_STATUS lora_status = LORA_OK;
-    lora_status = lora_transmit(sample, 10);
-
-    uint8_t sample2[] = {255,255,255,42,42,42,42,42,42,42};
-    lora_status = LORA_OK;
-    lora_status = lora_transmit(sample2, 8);  
+USB_STATUS usb_receive( void* data, size_t len, uint32_t timeout ) {
+    // does nothing for now; stub
+    return USB_OK;
 }
 
 /* USER CODE END 0 */
@@ -110,61 +114,55 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   // NOTE: INITIALIZE DRIVERS SETUPS HERE
-  uint8_t chip_id;
+  LORA_STATUS lora_init_status = lora_configure(NULL); /* use a nullptr so we use dflt cfgs */
 
-  lora_get_device_id( &chip_id );
+if( lora_init_status == LORA_USING_DEFAULTS )
+    {
+    /* give an indicator of default configs*/
+    for( int i = 0; i < 4; i++ )
+        {
+        HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
+        HAL_Delay(200);
+        HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 0);
+        HAL_Delay(200);
+        }
+    }
+else if( lora_init_status != LORA_OK )
+    {
+    error_fail_fast( ERROR_LORA_INIT_ERROR );
+    }
 
-  uint8_t test = chip_id;
+/* Initialize LoRa buffer */
+memset(&last_lora_message, 0, LORA_MESSAGE_SIZE);
 
-  /* Testing Purposes */
-  lora_reset();
+/* start terminal loop */
+usb_receive_IT( usb_rx_byte, 1 );
 
-  LORA_CONFIG lora_config = {
-    LORA_SLEEP_MODE,
-    LORA_SPREAD_12,
-    LORA_BANDWIDTH_125_KHZ,
-    LORA_ECR_4_5,
-    LORA_EXPLICIT_HEADER,
-    LORA_PA_BOOST,
-    915000
-  };
+/* Terminal Mode */
+HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
 
-  uint8_t device_id = 0;
-
-  LORA_STATUS lora_status = LORA_OK;
-
-  lora_status = lora_init(&lora_config);
-
-  /* Testing Purpose */
-  uint8_t operation_mode_register;
-  LORA_STATUS read_status1 = lora_read_register( LORA_REG_OPERATION_MODE, &operation_mode_register );
-
-  uint8_t modem_config1_register;
-  LORA_STATUS read_status2 = lora_read_register( LORA_REG_NUM_RX_BYTES, &modem_config1_register );
-
-  uint8_t modem_config2_register;
-  LORA_STATUS read_status3 = lora_read_register( LORA_REG_RX_HEADER_INFO, &modem_config2_register );
-
-  uint8_t freq_reg;
-  LORA_STATUS read_status4 = lora_read_register( LORA_REG_FREQ_MSB, &freq_reg );
-  LORA_STATUS read_status5 = lora_read_register( LORA_REG_FREQ_MSD, &freq_reg );
-  LORA_STATUS read_status6 = lora_read_register( LORA_REG_FREQ_LSB, &freq_reg );
-
+lora_status = lora_set_chip_mode( LORA_RX_CONTINUOUS_MODE );
 
   /*------------------------------------------------------------------------------
   Event Loop                                                                  
   ------------------------------------------------------------------------------*/
-  uint8_t sample[] = {1,2,3,4,5,6,7,8,9,10};
   while (1)
     {
       /* USER CODE END WHILE */
       /* USER CODE BEGIN 3 */
-      // NOTE: WRITE YOUR APPLICATION CODE HERE
-      lora_transmit_test();
-      HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 0);
-      HAL_Delay(250);
-      HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
-      HAL_Delay(10000);
+      if( start_lora && lora_receive_ready() == LORA_READY )
+        {
+        HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 0);
+        uint8_t rx_buf[LORA_MESSAGE_SIZE];
+        uint8_t rx_size = 0;
+	    lora_status = lora_receive(rx_buf, LORA_MESSAGE_SIZE, &rx_size);
+
+        if( lora_status == LORA_OK && rx_size == LORA_MESSAGE_SIZE )
+            {
+            memcpy( &last_lora_message, rx_buf, LORA_MESSAGE_SIZE );
+            }
+        HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
+        }
     }
     /* USER CODE END 3 */
 
@@ -299,9 +297,7 @@ void Error_Handler(void)
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
-  while (1)
-  {
-  }
+  error_fail_fast( ERROR_UNKNOWN_FATAL_ERROR );
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT

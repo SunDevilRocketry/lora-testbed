@@ -33,6 +33,7 @@ BUILD_DIR = build
 
 # Module Path
 MOD_DIR = ./mod
+DRIVER_DIR = ./driver
 
 ######################################
 # source
@@ -40,6 +41,7 @@ MOD_DIR = ./mod
 # C sources
 C_SOURCES =  \
 Core/Src/main.c \
+Core/Src/terminal.c \
 Core/Src/stm32f1xx_it.c \
 Core/Src/stm32f1xx_hal_msp.c \
 Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_gpio_ex.c \
@@ -57,7 +59,9 @@ Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_exti.c \
 Core/Src/system_stm32f1xx.c \
 Core/Src/sysmem.c \
 Core/Src/syscalls.c \
-$(MOD_DIR)/lora/lora.c
+$(DRIVER_DIR)/lora/lora.c \
+$(MOD_DIR)/math_sdr/math_sdr.c \
+$(MOD_DIR)/error_sdr/error_sdr.c
 
 
 # ASM sources
@@ -113,7 +117,8 @@ AS_DEFS =
 # C defines
 C_DEFS =  \
 -DUSE_HAL_DRIVER \
--DSTM32F103xB
+-DSTM32F103xB \
+-DF1_TESTBED
 
 
 # AS includes
@@ -126,7 +131,12 @@ C_INCLUDES =  \
 -IDrivers/STM32F1xx_HAL_Driver/Inc/Legacy \
 -IDrivers/CMSIS/Device/ST/STM32F1xx/Include \
 -IDrivers/CMSIS/Include \
--I$(MOD_DIR)/lora 
+-I$(DRIVER_DIR)/lora \
+-I$(DRIVER_DIR)/usb \
+-I$(MOD_DIR)/telemetry \
+-I$(MOD_DIR)/error_sdr \
+-I$(MOD_DIR)/commands \
+-I$(MOD_DIR)/math_sdr
 
 
 # compile gcc flags

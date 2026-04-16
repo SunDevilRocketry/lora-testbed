@@ -32,6 +32,9 @@ extern "C" {
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+extern SPI_HandleTypeDef hspi1;
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
@@ -46,7 +49,9 @@ extern "C" {
 
 /* Exported macro ------------------------------------------------------------*/
 /* USER CODE BEGIN EM */
-
+#define LORA_SPI hspi1
+#define HAL_DEFAULT_TIMEOUT 15
+#define USB_BUF_SIZE 256
 /* USER CODE END EM */
 
 /* Exported functions prototypes ---------------------------------------------*/
