@@ -58,7 +58,7 @@ EndBSPDependencies */
 /* Includes ------------------------------------------------------------------*/
 #include "usbd_cdc.h"
 #include "usbd_ctlreq.h"
-
+#include "usb_cdc_app.h"
 
 /** @addtogroup STM32_USB_DEVICE_LIBRARY
   * @{
@@ -692,6 +692,7 @@ static uint8_t  USBD_CDC_DataIn(USBD_HandleTypeDef *pdev, uint8_t epnum)
     else
     {
       hcdc->TxState = 0U;
+      USBD_App_CDC_TxComplete();
     }
     return USBD_OK;
   }

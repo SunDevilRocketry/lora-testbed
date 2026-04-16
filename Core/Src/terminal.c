@@ -99,14 +99,6 @@ if ( usb_status == USB_OK )
 
 		} /* switch( usb_rx_data ) */
 	} /* if ( usb_status == USB_OK ) */
-if( usb_status == USB_OK )
-    {
-    usb_status = usb_receive_IT( usb_rx_byte, 1 );
-    }
-else
-    {
-    error_fail_fast( ERROR_USB_UART_ERROR );
-    }
 
 return usb_status;
 

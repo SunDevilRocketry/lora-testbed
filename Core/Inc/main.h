@@ -28,6 +28,7 @@ extern "C" {
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f1xx_hal.h"
+#include "usb.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -58,6 +59,11 @@ extern SPI_HandleTypeDef hspi1;
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
+
+USB_STATUS terminal_loop
+	(
+	void
+	);
 
 #define LORA_RST_PIN GPIO_PIN_3
 #define LORA_RST_GPIO_PORT GPIOA

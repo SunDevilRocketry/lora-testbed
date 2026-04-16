@@ -29,6 +29,7 @@
 #include "telemetry.h"
 #include "error_sdr.h"
 #include "usb.h"
+#include "usb_cdc_app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -75,25 +76,218 @@ static void MX_SPI1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-USB_STATUS usb_receive_IT( void* data, size_t len ) {
-    // does nothing for now; stub
+typedef enum
+{
+    USB_RX_MODE_IDLE = 0,
+    USB_RX_MODE_BLOCKING,
+    USB_RX_MODE_INTERRUPT
+} usb_rx_mode_t;
+
+static volatile usb_rx_mode_t s_rx_mode = USB_RX_MODE_IDLE;
+static uint8_t *s_rx_buf = NULL;
+static volatile size_t s_rx_have = 0U;
+static size_t s_rx_goal = 0U;
+static uint8_t s_rx_stash[CDC_DATA_FS_MAX_PACKET_SIZE];
+static volatile size_t s_rx_stash_len = 0U;
+
+static void *s_tx_it_data = NULL;
+static size_t s_tx_it_len = 0U;
+
+__attribute__( ( weak ) ) void usb_receive_complete_callback( void *data, size_t len )
+{
+    (void)data;
+    (void)len;
+
+    terminal_loop();
+}
+
+__attribute__( ( weak ) ) void usb_transmit_complete_callback( void *data, size_t len )
+{
+    (void)data;
+    (void)len;
+
+    usb_receive_IT( usb_rx_byte, 1 );
+}
+
+static void usb_rx_drain_stash_locked( void )
+{
+    while ( s_rx_stash_len > 0U && s_rx_mode != USB_RX_MODE_IDLE && s_rx_buf != NULL && s_rx_have < s_rx_goal )
+        {
+        size_t need = s_rx_goal - s_rx_have;
+        size_t take = ( s_rx_stash_len < need ) ? s_rx_stash_len : need;
+        memcpy( s_rx_buf + s_rx_have, s_rx_stash, take );
+        s_rx_have += take;
+        size_t rem = s_rx_stash_len - take;
+        if ( rem > 0U )
+            {
+            memmove( s_rx_stash, s_rx_stash + take, rem );
+            }
+        s_rx_stash_len = rem;
+        }
+}
+
+void usb_process_cdc_rx( uint8_t *buf, uint32_t len )
+{
+    if ( len == 0U )
+        {
+        return;
+        }
+
+    if ( s_rx_mode == USB_RX_MODE_IDLE )
+        {
+        if ( s_rx_stash_len + len > sizeof( s_rx_stash ) )
+            {
+            return;
+            }
+        memcpy( s_rx_stash + s_rx_stash_len, buf, len );
+        s_rx_stash_len += len;
+        return;
+        }
+
+    uint32_t pos = 0U;
+    while ( pos < len && s_rx_have < s_rx_goal )
+        {
+        size_t need = s_rx_goal - s_rx_have;
+        uint32_t avail = len - pos;
+        size_t chunk = ( avail < need ) ? (size_t)avail : need;
+        memcpy( s_rx_buf + s_rx_have, buf + pos, chunk );
+        s_rx_have += chunk;
+        pos += chunk;
+        }
+
+    if ( pos < len )
+        {
+        uint32_t left = len - pos;
+        if ( s_rx_stash_len + left > sizeof( s_rx_stash ) )
+            {
+            return;
+            }
+        memcpy( s_rx_stash + s_rx_stash_len, buf + pos, left );
+        s_rx_stash_len += left;
+        }
+
+    if ( s_rx_have >= s_rx_goal && s_rx_mode == USB_RX_MODE_INTERRUPT )
+        {
+        s_rx_mode = USB_RX_MODE_IDLE;
+        void *cbdata = s_rx_buf;
+        size_t cblen = s_rx_goal;
+        s_rx_buf = NULL;
+        usb_receive_complete_callback( cbdata, cblen );
+        }
+}
+
+void USBD_App_CDC_TxComplete( void )
+{
+    usb_transmit_complete_callback( s_tx_it_data, s_tx_it_len );
+}
+
+USB_STATUS usb_receive_IT( void *data, size_t len )
+{
+    if ( data == NULL || len == 0U )
+        {
+        return USB_FAIL;
+        }
+
+    __disable_irq();
+    if ( s_rx_mode != USB_RX_MODE_IDLE )
+        {
+        __enable_irq();
+        return USB_FAIL;
+        }
+
+    s_rx_buf = (uint8_t *)data;
+    s_rx_goal = len;
+    s_rx_have = 0U;
+    s_rx_mode = USB_RX_MODE_INTERRUPT;
+    usb_rx_drain_stash_locked();
+
+    if ( s_rx_have >= s_rx_goal )
+        {
+        s_rx_mode = USB_RX_MODE_IDLE;
+        void *p = s_rx_buf;
+        size_t n = s_rx_goal;
+        s_rx_buf = NULL;
+        __enable_irq();
+        usb_receive_complete_callback( p, n );
+        return USB_OK;
+        }
+
+    __enable_irq();
     return USB_OK;
 }
 
-// ETS Temp: timeout is currently ignored
-USB_STATUS usb_receive( void* data, size_t len, uint32_t timeout ) {
-    // does nothing for now; stub
+USB_STATUS usb_receive( void *data, size_t len, uint32_t timeout )
+{
+    if ( data == NULL || len == 0U )
+        {
+        return USB_FAIL;
+        }
+
+    __disable_irq();
+    if ( s_rx_mode != USB_RX_MODE_IDLE )
+        {
+        __enable_irq();
+        return USB_FAIL;
+        }
+
+    s_rx_buf = (uint8_t *)data;
+    s_rx_goal = len;
+    s_rx_have = 0U;
+    s_rx_mode = USB_RX_MODE_BLOCKING;
+    usb_rx_drain_stash_locked();
+    __enable_irq();
+
+    if ( s_rx_have >= s_rx_goal )
+        {
+        __disable_irq();
+        s_rx_mode = USB_RX_MODE_IDLE;
+        s_rx_buf = NULL;
+        __enable_irq();
+        return USB_OK;
+        }
+
+    uint32_t tickstart = HAL_GetTick();
+    while ( s_rx_have < s_rx_goal )
+        {
+        if ( timeout != HAL_MAX_DELAY && ( HAL_GetTick() - tickstart ) >= timeout )
+            {
+            __disable_irq();
+            s_rx_mode = USB_RX_MODE_IDLE;
+            s_rx_buf = NULL;
+            __enable_irq();
+            return USB_TIMEOUT;
+            }
+        }
+
+    __disable_irq();
+    s_rx_mode = USB_RX_MODE_IDLE;
+    s_rx_buf = NULL;
+    __enable_irq();
     return USB_OK;
 }
 
-USB_STATUS usb_transmit( void* data, size_t len, uint32_t timeout ) {
+USB_STATUS usb_transmit( void *data, size_t len, uint32_t timeout )
+{
     uint32_t timeout_start = HAL_GetTick();
-    while(CDC_Transmit_FS((uint8_t*)data, len)==USBD_BUSY && (HAL_GetTick() - timeout_start) < timeout);
+    while ( CDC_Transmit_FS( (uint8_t *)data, (uint16_t)len ) == USBD_BUSY
+            && ( HAL_GetTick() - timeout_start ) < timeout )
+        ;
     return USB_OK;
 }
 
-USB_STATUS usb_transmit_IT( void* data, size_t len ) {
-    CDC_Transmit_FS((uint8_t*)data, len);
+USB_STATUS usb_transmit_IT( void *data, size_t len )
+{
+    uint8_t st = CDC_Transmit_FS( (uint8_t *)data, (uint16_t)len );
+    if ( st == USBD_BUSY )
+        {
+        return USB_FAIL;
+        }
+    if ( st != USBD_OK )
+        {
+        return USB_FAIL;
+        }
+    s_tx_it_data = data;
+    s_tx_it_len = len;
     return USB_OK;
 }
 
@@ -160,6 +354,82 @@ usb_receive_IT( usb_rx_byte, 1 );
 HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
 
 lora_status = lora_set_chip_mode( LORA_RX_CONTINUOUS_MODE );
+
+static const LORA_MESSAGE dashboard_dump_msg =
+    {
+    .header =
+        {
+        .uid =
+            {
+            .wafer_coords = 0x00000000UL,
+            .lot_num_1    = { '\0', '\0', '\0' },
+            .wafer_num    = 0x00,
+            .lot_num_2    = { '\0', '\0', '\0', '\0' }
+            },
+        .mid       = LORA_MSG_DASHBOARD_DATA,
+        .timestamp = 0x00000000UL
+        },
+    .payload.dashboard_dump =
+        {
+        .fsm_state = 0x00,
+        .data =
+            {
+            .acc_x             = -0.5f,
+            .acc_y             = 0.5f,
+            .acc_z             = 9.6f,
+            .gyro_x            = 0.0f,
+            .gyro_y            = 0.0f,
+            .gyro_z            = 0.0f,
+            .roll_angle        = 0.0f,
+            .pitch_angle       = 0.0f,
+            .yaw_angle         = 0.0f,
+            .roll_rate         = 0.0f,
+            .pitch_rate        = 0.0f,
+            .yaw_rate          = 0.0f,
+            .baro_pressure     = 98000.0f,
+            .baro_temp         = 0.0f,
+            .baro_alt          = 1000.0f,
+            .baro_velo         = 0.0f,
+            .gps_dec_longitude = 80.0f,
+            .gps_dec_latitude  = -20.0f
+            },
+        .explicit_padding = { 0x00, 0x00, 0x00 }
+        }
+    };
+
+static const LORA_MESSAGE vehicle_id_msg =
+    {
+    .header =
+        {
+        .uid =
+            {
+            .wafer_coords = 0x00000000UL,
+            .lot_num_1    = { '\0', '\0', '\0' },
+            .wafer_num    = 0x00,
+            .lot_num_2    = { '\0', '\0', '\0', '\0' }
+            },
+        .mid       = LORA_MSG_VEHICLE_ID,
+        .timestamp = 0x00000000UL
+        },
+    .payload.vehicle_id =
+        {
+        .hw_opcode        = 0x05,
+        .fw_opcode        = 0x06,
+        .version          = 0x0206000AUL, /* hw : fw : patch : prerelease (MSB→LSB) */
+        .flight_id        = "FLIGHT-010\0\0\0\0\0",  /* 16 bytes, null padded */
+        .explicit_padding = { 0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00 }  /* 54 bytes */
+        }
+    };
 
   /* USER CODE END 2 */
 
