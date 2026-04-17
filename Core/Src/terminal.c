@@ -93,7 +93,6 @@ if ( usb_status == USB_OK )
 		-------------------------------------------------------------*/
 		default:
 			{
-			error_fail_fast(ERROR_INVALID_STATE_ERROR);
 			break;
 			}
 

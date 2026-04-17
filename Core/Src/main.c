@@ -59,6 +59,7 @@ uint8_t usb_rx_byte[ USB_BUF_SIZE ];
 LORA_STATUS lora_status;
 LORA_MESSAGE last_lora_message;
 bool start_lora = false;
+uint32_t sequence_number = 0;
 
 /* LoRa config settings */
 LORA_PRESET lora_preset;
@@ -453,6 +454,7 @@ static const LORA_MESSAGE vehicle_id_msg =
             {
             memcpy( &last_lora_message, rx_buf, LORA_MESSAGE_SIZE );
             }
+        sequence_number++;
         HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
         }
     }
