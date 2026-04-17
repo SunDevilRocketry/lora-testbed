@@ -327,7 +327,15 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   // NOTE: INITIALIZE DRIVERS SETUPS HERE
-  LORA_STATUS lora_init_status = lora_configure(NULL); /* use a nullptr so we use dflt cfgs */
+  LORA_PRESET preset = {
+    LORA_SPREAD_12, /* SF 6 - 12 supported. Validate the range. */
+    LORA_BANDWIDTH_125_KHZ, /* enum -- spec defined in LORA_BANDWIDTH. Packed to one byte. */
+    5, /* error coding options are 4:5, 4:6, 4:7, and 4:8 */
+    0, /* true: +20 dBm boost */
+    915000 /* frequency in kHz */
+    /* omitted: chipmode, header mode (defined by fw) */
+    };
+  LORA_STATUS lora_init_status = lora_configure(&preset); /* use a nullptr so we use dflt cfgs */
 
 if( lora_init_status == LORA_USING_DEFAULTS )
     {
@@ -353,8 +361,6 @@ usb_receive_IT( usb_rx_byte, 1 );
 
 /* Terminal Mode */
 HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
-
-lora_status = lora_set_chip_mode( LORA_RX_CONTINUOUS_MODE );
 
 static const LORA_MESSAGE dashboard_dump_msg =
     {
@@ -439,11 +445,12 @@ static const LORA_MESSAGE vehicle_id_msg =
   /*------------------------------------------------------------------------------
   Event Loop                                                                  
   ------------------------------------------------------------------------------*/
+  lora_status = lora_set_chip_mode( LORA_RX_CONTINUOUS_MODE );
   while (1)
     {
       /* USER CODE END WHILE */
       /* USER CODE BEGIN 3 */
-      if( start_lora && lora_receive_ready() == LORA_READY )
+      if( lora_receive_ready() == LORA_READY )
         {
         HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 0);
         uint8_t rx_buf[LORA_MESSAGE_SIZE];
