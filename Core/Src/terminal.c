@@ -52,6 +52,7 @@ USB_STATUS terminal_loop
 ------------------------------------------------------------------------------*/
 uint8_t     command_code = usb_rx_byte[0];             /* Command opcode              */
 static USB_STATUS usb_status = USB_OK;  			   /* Status of USB module        */                
+bool tx_started = false;
 
 /*------------------------------------------------------------------------------
  Terminal Handler                                                                  
@@ -68,9 +69,10 @@ if ( usb_status == USB_OK )
 			{
 			/* Send firmware identifying code */
             usb_tx_byte[0] = 0x10;
-            usb_tx_byte[1] = FIRMWARE_RECEIVER;
+            usb_tx_byte[1] = 0x11;
 			usb_status = usb_transmit_IT( usb_tx_byte, 
 						                  sizeof( uint8_t ) * 2 );
+            tx_started = ( usb_status == USB_OK );
 			break;
 			} /* CONNECT_OP */
 		/*-------------------------------------------------------------
@@ -86,6 +88,7 @@ if ( usb_status == USB_OK )
 
             /* transmit */
             usb_status = usb_transmit_IT(usb_tx_byte, LORA_MESSAGE_SIZE);
+            tx_started = ( usb_status == USB_OK );
 			break;
 			} /* DASHBOARD_OP */
 		/*-------------------------------------------------------------
@@ -98,6 +101,12 @@ if ( usb_status == USB_OK )
 
 		} /* switch( usb_rx_data ) */
 	} /* if ( usb_status == USB_OK ) */
+
+/* Keep listening for the next command unless TX completion callback will do it. */
+if ( tx_started == false )
+    {
+    (void)usb_receive_IT( usb_rx_byte, 1 );
+    }
 
 return usb_status;
 

@@ -25,6 +25,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "usbd_cdc_if.h"
+#include "usbd_core.h"
 #include "lora.h"
 #include "telemetry.h"
 #include "error_sdr.h"
@@ -93,6 +94,51 @@ static volatile size_t s_rx_stash_len = 0U;
 
 static void *s_tx_it_data = NULL;
 static size_t s_tx_it_len = 0U;
+static volatile bool s_usb_recover_requested = false;
+static uint32_t s_usb_last_recover_tick = 0U;
+static uint8_t s_usb_tx_fail_count = 0U;
+
+#define USB_RECOVER_COOLDOWN_MS   (250U)
+#define USB_TX_FAILS_BEFORE_RESET (3U)
+
+extern USBD_HandleTypeDef hUsbDeviceFS;
+
+static void usb_request_recovery( void )
+{
+    s_usb_recover_requested = true;
+}
+
+static void usb_service_recovery( void )
+{
+    if ( s_usb_recover_requested == false )
+        {
+        return;
+        }
+
+    uint32_t now = HAL_GetTick();
+    if ( ( now - s_usb_last_recover_tick ) < USB_RECOVER_COOLDOWN_MS )
+        {
+        return;
+        }
+
+    s_usb_recover_requested = false;
+    s_usb_last_recover_tick = now;
+    s_usb_tx_fail_count = 0U;
+
+    (void)USBD_Stop( &hUsbDeviceFS );
+    (void)USBD_DeInit( &hUsbDeviceFS );
+    MX_USB_DEVICE_Init();
+
+    __disable_irq();
+    s_rx_mode = USB_RX_MODE_IDLE;
+    s_rx_buf = NULL;
+    s_rx_have = 0U;
+    s_rx_goal = 0U;
+    s_rx_stash_len = 0U;
+    __enable_irq();
+
+    (void)usb_receive_IT( usb_rx_byte, 1 );
+}
 
 __attribute__( ( weak ) ) void usb_receive_complete_callback( void *data, size_t len )
 {
@@ -270,10 +316,23 @@ USB_STATUS usb_receive( void *data, size_t len, uint32_t timeout )
 USB_STATUS usb_transmit( void *data, size_t len, uint32_t timeout )
 {
     uint32_t timeout_start = HAL_GetTick();
-    while ( CDC_Transmit_FS( (uint8_t *)data, (uint16_t)len ) == USBD_BUSY
-            && ( HAL_GetTick() - timeout_start ) < timeout )
-        ;
-    return USB_OK;
+    uint8_t tx_status = CDC_Transmit_FS( (uint8_t *)data, (uint16_t)len );
+    while ( tx_status == USBD_BUSY && ( HAL_GetTick() - timeout_start ) < timeout )
+        {
+        tx_status = CDC_Transmit_FS( (uint8_t *)data, (uint16_t)len );
+        }
+
+    if ( tx_status == USBD_OK )
+        {
+        s_usb_tx_fail_count = 0U;
+        return USB_OK;
+        }
+
+    if ( ++s_usb_tx_fail_count >= USB_TX_FAILS_BEFORE_RESET )
+        {
+        usb_request_recovery();
+        }
+    return ( tx_status == USBD_BUSY ) ? USB_TIMEOUT : USB_FAIL;
 }
 
 USB_STATUS usb_transmit_IT( void *data, size_t len )
@@ -281,12 +340,21 @@ USB_STATUS usb_transmit_IT( void *data, size_t len )
     uint8_t st = CDC_Transmit_FS( (uint8_t *)data, (uint16_t)len );
     if ( st == USBD_BUSY )
         {
+        if ( ++s_usb_tx_fail_count >= USB_TX_FAILS_BEFORE_RESET )
+            {
+            usb_request_recovery();
+            }
         return USB_FAIL;
         }
     if ( st != USBD_OK )
         {
+        if ( ++s_usb_tx_fail_count >= USB_TX_FAILS_BEFORE_RESET )
+            {
+            usb_request_recovery();
+            }
         return USB_FAIL;
         }
+    s_usb_tx_fail_count = 0U;
     s_tx_it_data = data;
     s_tx_it_len = len;
     return USB_OK;
@@ -328,8 +396,8 @@ int main(void)
 
   // NOTE: INITIALIZE DRIVERS SETUPS HERE
   LORA_PRESET preset = {
-    LORA_SPREAD_12, /* SF 6 - 12 supported. Validate the range. */
-    LORA_BANDWIDTH_125_KHZ, /* enum -- spec defined in LORA_BANDWIDTH. Packed to one byte. */
+    LORA_SPREAD_7, /* SF 6 - 12 supported. Validate the range. */
+    LORA_BANDWIDTH_500_KHZ, /* enum -- spec defined in LORA_BANDWIDTH. Packed to one byte. */
     5, /* error coding options are 4:5, 4:6, 4:7, and 4:8 */
     0, /* true: +20 dBm boost */
     915000 /* frequency in kHz */
@@ -450,6 +518,8 @@ static const LORA_MESSAGE vehicle_id_msg =
     {
       /* USER CODE END WHILE */
       /* USER CODE BEGIN 3 */
+      usb_service_recovery();
+
       if( lora_receive_ready() == LORA_READY )
         {
         HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 0);
