@@ -81,8 +81,8 @@ void lora_receive_test(){
       ready = lora_receive_ready();
 
       char bufx[255];
-      int len = sprintf( bufx, "Ready: %d\n", ready);
-      serial_println( bufx, len );
+      // int len = sprintf( bufx, "Ready: %d\n", ready);
+      // serial_println( bufx, len );
     }
 
     lora_status = lora_receive(buffer, &len_output);
@@ -97,8 +97,8 @@ void lora_receive_test(){
     serial_println(buf3, len );
 
     /* if (len_output != 0){ */ if( lora_status == LORA_OK ){
-      char buf[255];   
-      char buf2[16];   
+      char buf[255];
+      char buf2[16];
       int len = sprintf(buf, "Buffer Size: %d\r\n", (int) len_output);
       serial_print(buf, len);
 
@@ -115,7 +115,7 @@ void lora_receive_test(){
 void lora_transmit_test(){
     uint8_t sample[] = {1,2,3,4,5,6,7,8,9,10};
     LORA_STATUS lora_status = LORA_OK;
-    lora_status = lora_transmit(sample, 10);  
+    lora_status = lora_transmit(sample, 10);
 }
 
 /* USER CODE END 0 */
@@ -208,7 +208,7 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   /*------------------------------------------------------------------------------
-  Event Loop                                                                  
+  Event Loop
   ------------------------------------------------------------------------------*/
   while (1)
   {
