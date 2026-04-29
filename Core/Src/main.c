@@ -18,10 +18,19 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "usb_device.h"
+#include <stdlib.h>
+#include <string.h>
+
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "usbd_cdc_if.h"
+#include "usbd_core.h"
 #include "lora.h"
-
+#include "telemetry.h"
+#include "error_sdr.h"
+#include "usb.h"
+#include "usb_cdc_app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -43,6 +52,18 @@
 SPI_HandleTypeDef hspi1;
 
 /* USER CODE BEGIN PV */
+/* USB data buffer */
+uint8_t usb_tx_byte[ USB_BUF_SIZE ];
+uint8_t usb_rx_byte[ USB_BUF_SIZE ];
+
+/* LoRa global receive buffer */
+LORA_STATUS lora_status;
+LORA_MESSAGE last_lora_message;
+bool start_lora = false;
+uint32_t sequence_number = 0;
+
+/* LoRa config settings */
+LORA_PRESET lora_preset;
 
 /* USER CODE END PV */
 
@@ -57,23 +78,286 @@ static void MX_SPI1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-void lora_receive_test(){
-    LORA_STATUS lora_status = LORA_OK;
-    uint8_t buffer[64];
-    uint8_t len_output = 0;
+typedef enum
+{
+    USB_RX_MODE_IDLE = 0,
+    USB_RX_MODE_BLOCKING,
+    USB_RX_MODE_INTERRUPT
+} usb_rx_mode_t;
 
-    lora_status = lora_receive(buffer, &len_output);
-    
+static volatile usb_rx_mode_t s_rx_mode = USB_RX_MODE_IDLE;
+static uint8_t *s_rx_buf = NULL;
+static volatile size_t s_rx_have = 0U;
+static size_t s_rx_goal = 0U;
+static uint8_t s_rx_stash[CDC_DATA_FS_MAX_PACKET_SIZE];
+static volatile size_t s_rx_stash_len = 0U;
+
+static void *s_tx_it_data = NULL;
+static size_t s_tx_it_len = 0U;
+static volatile bool s_usb_recover_requested = false;
+static uint32_t s_usb_last_recover_tick = 0U;
+static uint8_t s_usb_tx_fail_count = 0U;
+
+#define USB_RECOVER_COOLDOWN_MS   (250U)
+#define USB_TX_FAILS_BEFORE_RESET (3U)
+
+extern USBD_HandleTypeDef hUsbDeviceFS;
+
+static void usb_request_recovery( void )
+{
+    s_usb_recover_requested = true;
 }
 
-void lora_transmit_test(){
-    uint8_t sample[] = {42,42,42,42,42,42,42,42,42,42};
-    LORA_STATUS lora_status = LORA_OK;
-    lora_status = lora_transmit(sample, 10);
+static void usb_service_recovery( void )
+{
+    if ( s_usb_recover_requested == false )
+        {
+        return;
+        }
 
-    uint8_t sample2[] = {255,255,255,42,42,42,42,42,42,42};
-    lora_status = LORA_OK;
-    lora_status = lora_transmit(sample2, 8);  
+    uint32_t now = HAL_GetTick();
+    if ( ( now - s_usb_last_recover_tick ) < USB_RECOVER_COOLDOWN_MS )
+        {
+        return;
+        }
+
+    s_usb_recover_requested = false;
+    s_usb_last_recover_tick = now;
+    s_usb_tx_fail_count = 0U;
+
+    (void)USBD_Stop( &hUsbDeviceFS );
+    (void)USBD_DeInit( &hUsbDeviceFS );
+    MX_USB_DEVICE_Init();
+
+    __disable_irq();
+    s_rx_mode = USB_RX_MODE_IDLE;
+    s_rx_buf = NULL;
+    s_rx_have = 0U;
+    s_rx_goal = 0U;
+    s_rx_stash_len = 0U;
+    __enable_irq();
+
+    (void)usb_receive_IT( usb_rx_byte, 1 );
+}
+
+__attribute__( ( weak ) ) void usb_receive_complete_callback( void *data, size_t len )
+{
+    (void)data;
+    (void)len;
+
+    terminal_loop();
+}
+
+__attribute__( ( weak ) ) void usb_transmit_complete_callback( void *data, size_t len )
+{
+    (void)data;
+    (void)len;
+
+    usb_receive_IT( usb_rx_byte, 1 );
+}
+
+static void usb_rx_drain_stash_locked( void )
+{
+    while ( s_rx_stash_len > 0U && s_rx_mode != USB_RX_MODE_IDLE && s_rx_buf != NULL && s_rx_have < s_rx_goal )
+        {
+        size_t need = s_rx_goal - s_rx_have;
+        size_t take = ( s_rx_stash_len < need ) ? s_rx_stash_len : need;
+        memcpy( s_rx_buf + s_rx_have, s_rx_stash, take );
+        s_rx_have += take;
+        size_t rem = s_rx_stash_len - take;
+        if ( rem > 0U )
+            {
+            memmove( s_rx_stash, s_rx_stash + take, rem );
+            }
+        s_rx_stash_len = rem;
+        }
+}
+
+void usb_process_cdc_rx( uint8_t *buf, uint32_t len )
+{
+    if ( len == 0U )
+        {
+        return;
+        }
+
+    if ( s_rx_mode == USB_RX_MODE_IDLE )
+        {
+        if ( s_rx_stash_len + len > sizeof( s_rx_stash ) )
+            {
+            return;
+            }
+        memcpy( s_rx_stash + s_rx_stash_len, buf, len );
+        s_rx_stash_len += len;
+        return;
+        }
+
+    uint32_t pos = 0U;
+    while ( pos < len && s_rx_have < s_rx_goal )
+        {
+        size_t need = s_rx_goal - s_rx_have;
+        uint32_t avail = len - pos;
+        size_t chunk = ( avail < need ) ? (size_t)avail : need;
+        memcpy( s_rx_buf + s_rx_have, buf + pos, chunk );
+        s_rx_have += chunk;
+        pos += chunk;
+        }
+
+    if ( pos < len )
+        {
+        uint32_t left = len - pos;
+        if ( s_rx_stash_len + left > sizeof( s_rx_stash ) )
+            {
+            return;
+            }
+        memcpy( s_rx_stash + s_rx_stash_len, buf + pos, left );
+        s_rx_stash_len += left;
+        }
+
+    if ( s_rx_have >= s_rx_goal && s_rx_mode == USB_RX_MODE_INTERRUPT )
+        {
+        s_rx_mode = USB_RX_MODE_IDLE;
+        void *cbdata = s_rx_buf;
+        size_t cblen = s_rx_goal;
+        s_rx_buf = NULL;
+        usb_receive_complete_callback( cbdata, cblen );
+        }
+}
+
+void USBD_App_CDC_TxComplete( void )
+{
+    usb_transmit_complete_callback( s_tx_it_data, s_tx_it_len );
+}
+
+USB_STATUS usb_receive_IT( void *data, size_t len )
+{
+    if ( data == NULL || len == 0U )
+        {
+        return USB_FAIL;
+        }
+
+    __disable_irq();
+    if ( s_rx_mode != USB_RX_MODE_IDLE )
+        {
+        __enable_irq();
+        return USB_FAIL;
+        }
+
+    s_rx_buf = (uint8_t *)data;
+    s_rx_goal = len;
+    s_rx_have = 0U;
+    s_rx_mode = USB_RX_MODE_INTERRUPT;
+    usb_rx_drain_stash_locked();
+
+    if ( s_rx_have >= s_rx_goal )
+        {
+        s_rx_mode = USB_RX_MODE_IDLE;
+        void *p = s_rx_buf;
+        size_t n = s_rx_goal;
+        s_rx_buf = NULL;
+        __enable_irq();
+        usb_receive_complete_callback( p, n );
+        return USB_OK;
+        }
+
+    __enable_irq();
+    return USB_OK;
+}
+
+USB_STATUS usb_receive( void *data, size_t len, uint32_t timeout )
+{
+    if ( data == NULL || len == 0U )
+        {
+        return USB_FAIL;
+        }
+
+    __disable_irq();
+    if ( s_rx_mode != USB_RX_MODE_IDLE )
+        {
+        __enable_irq();
+        return USB_FAIL;
+        }
+
+    s_rx_buf = (uint8_t *)data;
+    s_rx_goal = len;
+    s_rx_have = 0U;
+    s_rx_mode = USB_RX_MODE_BLOCKING;
+    usb_rx_drain_stash_locked();
+    __enable_irq();
+
+    if ( s_rx_have >= s_rx_goal )
+        {
+        __disable_irq();
+        s_rx_mode = USB_RX_MODE_IDLE;
+        s_rx_buf = NULL;
+        __enable_irq();
+        return USB_OK;
+        }
+
+    uint32_t tickstart = HAL_GetTick();
+    while ( s_rx_have < s_rx_goal )
+        {
+        if ( timeout != HAL_MAX_DELAY && ( HAL_GetTick() - tickstart ) >= timeout )
+            {
+            __disable_irq();
+            s_rx_mode = USB_RX_MODE_IDLE;
+            s_rx_buf = NULL;
+            __enable_irq();
+            return USB_TIMEOUT;
+            }
+        }
+
+    __disable_irq();
+    s_rx_mode = USB_RX_MODE_IDLE;
+    s_rx_buf = NULL;
+    __enable_irq();
+    return USB_OK;
+}
+
+USB_STATUS usb_transmit( void *data, size_t len, uint32_t timeout )
+{
+    uint32_t timeout_start = HAL_GetTick();
+    uint8_t tx_status = CDC_Transmit_FS( (uint8_t *)data, (uint16_t)len );
+    while ( tx_status == USBD_BUSY && ( HAL_GetTick() - timeout_start ) < timeout )
+        {
+        tx_status = CDC_Transmit_FS( (uint8_t *)data, (uint16_t)len );
+        }
+
+    if ( tx_status == USBD_OK )
+        {
+        s_usb_tx_fail_count = 0U;
+        return USB_OK;
+        }
+
+    if ( ++s_usb_tx_fail_count >= USB_TX_FAILS_BEFORE_RESET )
+        {
+        usb_request_recovery();
+        }
+    return ( tx_status == USBD_BUSY ) ? USB_TIMEOUT : USB_FAIL;
+}
+
+USB_STATUS usb_transmit_IT( void *data, size_t len )
+{
+    uint8_t st = CDC_Transmit_FS( (uint8_t *)data, (uint16_t)len );
+    if ( st == USBD_BUSY )
+        {
+        if ( ++s_usb_tx_fail_count >= USB_TX_FAILS_BEFORE_RESET )
+            {
+            usb_request_recovery();
+            }
+        return USB_FAIL;
+        }
+    if ( st != USBD_OK )
+        {
+        if ( ++s_usb_tx_fail_count >= USB_TX_FAILS_BEFORE_RESET )
+            {
+            usb_request_recovery();
+            }
+        return USB_FAIL;
+        }
+    s_usb_tx_fail_count = 0U;
+    s_tx_it_data = data;
+    s_tx_it_len = len;
+    return USB_OK;
 }
 
 /* USER CODE END 0 */
@@ -107,69 +391,152 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_SPI1_Init();
+  MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
 
   // NOTE: INITIALIZE DRIVERS SETUPS HERE
-  uint8_t chip_id;
+  LORA_PRESET preset = {
+    LORA_SPREAD_7, /* SF 6 - 12 supported. Validate the range. */
+    LORA_BANDWIDTH_500_KHZ, /* enum -- spec defined in LORA_BANDWIDTH. Packed to one byte. */
+    5, /* error coding options are 4:5, 4:6, 4:7, and 4:8 */
+    0, /* true: +20 dBm boost */
+    915000 /* frequency in kHz */
+    /* omitted: chipmode, header mode (defined by fw) */
+    };
+  LORA_STATUS lora_init_status = lora_configure(&preset); /* use a nullptr so we use dflt cfgs */
 
-  lora_get_device_id( &chip_id );
+if( lora_init_status == LORA_USING_DEFAULTS )
+    {
+    /* give an indicator of default configs*/
+    for( int i = 0; i < 4; i++ )
+        {
+        HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
+        HAL_Delay(200);
+        HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 0);
+        HAL_Delay(200);
+        }
+    }
+else if( lora_init_status != LORA_OK )
+    {
+    error_fail_fast( ERROR_LORA_INIT_ERROR );
+    }
 
-  uint8_t test = chip_id;
+/* Initialize LoRa buffer */
+memset(&last_lora_message, 0, LORA_MESSAGE_SIZE);
 
-  /* Testing Purposes */
-  lora_reset();
+/* start terminal loop */
+usb_receive_IT( usb_rx_byte, 1 );
 
-  LORA_CONFIG lora_config = {
-    LORA_SLEEP_MODE,
-    LORA_SPREAD_12,
-    LORA_BANDWIDTH_125_KHZ,
-    LORA_ECR_4_5,
-    LORA_EXPLICIT_HEADER,
-    LORA_PA_BOOST,
-    915000
-  };
+/* Terminal Mode */
+HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
 
-  uint8_t device_id = 0;
+static const LORA_MESSAGE dashboard_dump_msg =
+    {
+    .header =
+        {
+        .uid =
+            {
+            .wafer_coords = 0x00000000UL,
+            .lot_num_1    = { '\0', '\0', '\0' },
+            .wafer_num    = 0x00,
+            .lot_num_2    = { '\0', '\0', '\0', '\0' }
+            },
+        .mid       = LORA_MSG_DASHBOARD_DATA,
+        .timestamp = 0x00000000UL
+        },
+    .payload.dashboard_dump =
+        {
+        .fsm_state = 0x00,
+        .data =
+            {
+            .acc_x             = -0.5f,
+            .acc_y             = 0.5f,
+            .acc_z             = 9.6f,
+            .gyro_x            = 0.0f,
+            .gyro_y            = 0.0f,
+            .gyro_z            = 0.0f,
+            .roll_angle        = 0.0f,
+            .pitch_angle       = 0.0f,
+            .yaw_angle         = 0.0f,
+            .roll_rate         = 0.0f,
+            .pitch_rate        = 0.0f,
+            .yaw_rate          = 0.0f,
+            .baro_pressure     = 98000.0f,
+            .baro_temp         = 0.0f,
+            .baro_alt          = 1000.0f,
+            .baro_velo         = 0.0f,
+            .gps_dec_longitude = 80.0f,
+            .gps_dec_latitude  = -20.0f
+            },
+        .explicit_padding = { 0x00, 0x00, 0x00 }
+        }
+    };
 
-  LORA_STATUS lora_status = LORA_OK;
+static const LORA_MESSAGE vehicle_id_msg =
+    {
+    .header =
+        {
+        .uid =
+            {
+            .wafer_coords = 0x00000000UL,
+            .lot_num_1    = { '\0', '\0', '\0' },
+            .wafer_num    = 0x00,
+            .lot_num_2    = { '\0', '\0', '\0', '\0' }
+            },
+        .mid       = LORA_MSG_VEHICLE_ID,
+        .timestamp = 0x00000000UL
+        },
+    .payload.vehicle_id =
+        {
+        .hw_opcode        = 0x05,
+        .fw_opcode        = 0x06,
+        .version          = 0x0206000AUL, /* hw : fw : patch : prerelease (MSB→LSB) */
+        .flight_id        = "FLIGHT-010\0\0\0\0\0",  /* 16 bytes, null padded */
+        .explicit_padding = { 0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00 }  /* 54 bytes */
+        }
+    };
 
-  lora_status = lora_init(&lora_config);
+  /* USER CODE END 2 */
 
-  /* Testing Purpose */
-  uint8_t operation_mode_register;
-  LORA_STATUS read_status1 = lora_read_register( LORA_REG_OPERATION_MODE, &operation_mode_register );
-
-  uint8_t modem_config1_register;
-  LORA_STATUS read_status2 = lora_read_register( LORA_REG_NUM_RX_BYTES, &modem_config1_register );
-
-  uint8_t modem_config2_register;
-  LORA_STATUS read_status3 = lora_read_register( LORA_REG_RX_HEADER_INFO, &modem_config2_register );
-
-  uint8_t freq_reg;
-  LORA_STATUS read_status4 = lora_read_register( LORA_REG_FREQ_MSB, &freq_reg );
-  LORA_STATUS read_status5 = lora_read_register( LORA_REG_FREQ_MSD, &freq_reg );
-  LORA_STATUS read_status6 = lora_read_register( LORA_REG_FREQ_LSB, &freq_reg );
-
-
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
   /*------------------------------------------------------------------------------
   Event Loop                                                                  
   ------------------------------------------------------------------------------*/
-  uint8_t sample[] = {1,2,3,4,5,6,7,8,9,10};
+  lora_status = lora_set_chip_mode( LORA_RX_CONTINUOUS_MODE );
   while (1)
     {
       /* USER CODE END WHILE */
       /* USER CODE BEGIN 3 */
-      // NOTE: WRITE YOUR APPLICATION CODE HERE
-      lora_transmit_test();
-      HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 0);
-      HAL_Delay(250);
-      HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
-      HAL_Delay(10000);
+      usb_service_recovery();
+
+      if( lora_receive_ready() == LORA_READY )
+        {
+        HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 0);
+        uint8_t rx_buf[LORA_MESSAGE_SIZE];
+        uint8_t rx_size = 0;
+	    lora_status = lora_receive(rx_buf, LORA_MESSAGE_SIZE, &rx_size);
+
+        if( lora_status == LORA_OK && rx_size == LORA_MESSAGE_SIZE )
+            {
+            memcpy( &last_lora_message, rx_buf, LORA_MESSAGE_SIZE );
+            }
+        sequence_number++;
+        HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
+        }
     }
-    /* USER CODE END 3 */
-
+  /* USER CODE END 3 */
 }
-
 
 /**
   * @brief System Clock Configuration
@@ -179,14 +546,18 @@ void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -196,12 +567,18 @@ void SystemClock_Config(void)
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV8;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USB;
+  PeriphClkInit.UsbClockSelection = RCC_USBCLKSOURCE_PLL_DIV1_5;
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
     Error_Handler();
   }
@@ -259,6 +636,7 @@ static void MX_GPIO_Init(void)
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
@@ -299,9 +677,7 @@ void Error_Handler(void)
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
-  while (1)
-  {
-  }
+  error_fail_fast( ERROR_UNKNOWN_FATAL_ERROR );
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT
