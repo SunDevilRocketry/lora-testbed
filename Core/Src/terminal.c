@@ -36,7 +36,7 @@ extern LORA_PRESET lora_preset;
 extern uint8_t usb_tx_byte[ USB_BUF_SIZE ];
 extern uint8_t usb_rx_byte[ USB_BUF_SIZE ];
 extern bool start_lora;
-extern LORA_MESSAGE last_lora_message;
+extern TELEMETRY_MESSAGE last_lora_message;
 
 /*------------------------------------------------------------------------------
  Procedures                                                 
@@ -84,10 +84,10 @@ if ( usb_status == USB_OK )
             start_lora = true;
 
 			/* Get dashboard data */
-			memcpy(usb_tx_byte, &last_lora_message, LORA_MESSAGE_SIZE);
+			memcpy(usb_tx_byte, &last_lora_message, TELEMETRY_MESSAGE_SIZE);
 
             /* transmit */
-            usb_status = usb_transmit_IT(usb_tx_byte, LORA_MESSAGE_SIZE);
+            usb_status = usb_transmit_IT(usb_tx_byte, TELEMETRY_MESSAGE_SIZE);
             tx_started = ( usb_status == USB_OK );
 			break;
 			} /* DASHBOARD_OP */
