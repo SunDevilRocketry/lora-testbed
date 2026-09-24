@@ -58,7 +58,7 @@ uint8_t usb_rx_byte[ USB_BUF_SIZE ];
 
 /* LoRa global receive buffer */
 LORA_STATUS lora_status;
-LORA_MESSAGE last_lora_message;
+TELEMETRY_MESSAGE last_lora_message;
 bool start_lora = false;
 uint32_t sequence_number = 0;
 
@@ -396,9 +396,9 @@ int main(void)
 
   // NOTE: INITIALIZE DRIVERS SETUPS HERE
   LORA_PRESET preset = {
-    LORA_SPREAD_7, /* SF 6 - 12 supported. Validate the range. */
-    LORA_BANDWIDTH_500_KHZ, /* enum -- spec defined in LORA_BANDWIDTH. Packed to one byte. */
-    5, /* error coding options are 4:5, 4:6, 4:7, and 4:8 */
+    LORA_SPREAD_8, /* SF 6 - 12 supported. Validate the range. */
+    LORA_BANDWIDTH_250_KHZ, /* enum -- spec defined in LORA_BANDWIDTH. Packed to one byte. */
+    6, /* error coding options are 4:5, 4:6, 4:7, and 4:8 */
     0, /* true: +20 dBm boost */
     915000 /* frequency in kHz */
     /* omitted: chipmode, header mode (defined by fw) */
@@ -422,7 +422,7 @@ else if( lora_init_status != LORA_OK )
     }
 
 /* Initialize LoRa buffer */
-memset(&last_lora_message, 0, LORA_MESSAGE_SIZE);
+memset(&last_lora_message, 0, TELEMETRY_MESSAGE_SIZE);
 
 /* start terminal loop */
 usb_receive_IT( usb_rx_byte, 1 );
@@ -430,18 +430,11 @@ usb_receive_IT( usb_rx_byte, 1 );
 /* Terminal Mode */
 HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
 
-static const LORA_MESSAGE dashboard_dump_msg =
+static const TELEMETRY_MESSAGE dashboard_dump_msg =
     {
     .header =
         {
-        .uid =
-            {
-            .wafer_coords = 0x00000000UL,
-            .lot_num_1    = { '\0', '\0', '\0' },
-            .wafer_num    = 0x00,
-            .lot_num_2    = { '\0', '\0', '\0', '\0' }
-            },
-        .mid       = LORA_MSG_DASHBOARD_DATA,
+        .mid       = TELEMETRY_MSG_DASHBOARD_DATA,
         .timestamp = 0x00000000UL
         },
     .payload.dashboard_dump =
@@ -449,60 +442,20 @@ static const LORA_MESSAGE dashboard_dump_msg =
         .fsm_state = 0x00,
         .data =
             {
-            .acc_x             = -0.5f,
-            .acc_y             = 0.5f,
-            .acc_z             = 9.6f,
-            .gyro_x            = 0.0f,
-            .gyro_y            = 0.0f,
-            .gyro_z            = 0.0f,
-            .roll_angle        = 0.0f,
-            .pitch_angle       = 0.0f,
-            .yaw_angle         = 0.0f,
-            .roll_rate         = 0.0f,
-            .pitch_rate        = 0.0f,
-            .yaw_rate          = 0.0f,
-            .baro_pressure     = 98000.0f,
-            .baro_temp         = 0.0f,
-            .baro_alt          = 1000.0f,
-            .baro_velo         = 0.0f,
-            .gps_dec_longitude = 80.0f,
-            .gps_dec_latitude  = -20.0f
+            .attitude = 
+                {
+                .w = 0.0f,
+                .x = 0.0f,
+                .y = 0.0f,
+                .z = 1.0f 
+                },
+            .alt = 0.0f,
+            .latitude = 0.0f,
+            .longitude = 0.0f,
+            .acc_x = 0.0f,
+            .roll_rate = 0.0f
             },
         .explicit_padding = { 0x00, 0x00, 0x00 }
-        }
-    };
-
-static const LORA_MESSAGE vehicle_id_msg =
-    {
-    .header =
-        {
-        .uid =
-            {
-            .wafer_coords = 0x00000000UL,
-            .lot_num_1    = { '\0', '\0', '\0' },
-            .wafer_num    = 0x00,
-            .lot_num_2    = { '\0', '\0', '\0', '\0' }
-            },
-        .mid       = LORA_MSG_VEHICLE_ID,
-        .timestamp = 0x00000000UL
-        },
-    .payload.vehicle_id =
-        {
-        .hw_opcode        = 0x05,
-        .fw_opcode        = 0x06,
-        .version          = 0x0206000AUL, /* hw : fw : patch : prerelease (MSB→LSB) */
-        .flight_id        = "FLIGHT-010\0\0\0\0\0",  /* 16 bytes, null padded */
-        .explicit_padding = { 0x00, 0x00, 0x00, 0x00, 0x00,
-                              0x00, 0x00, 0x00, 0x00, 0x00,
-                              0x00, 0x00, 0x00, 0x00, 0x00,
-                              0x00, 0x00, 0x00, 0x00, 0x00,
-                              0x00, 0x00, 0x00, 0x00, 0x00,
-                              0x00, 0x00, 0x00, 0x00, 0x00,
-                              0x00, 0x00, 0x00, 0x00, 0x00,
-                              0x00, 0x00, 0x00, 0x00, 0x00,
-                              0x00, 0x00, 0x00, 0x00, 0x00,
-                              0x00, 0x00, 0x00, 0x00, 0x00,
-                              0x00, 0x00, 0x00, 0x00 }  /* 54 bytes */
         }
     };
 
@@ -523,13 +476,13 @@ static const LORA_MESSAGE vehicle_id_msg =
       if( lora_receive_ready() == LORA_READY )
         {
         HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 0);
-        uint8_t rx_buf[LORA_MESSAGE_SIZE];
+        uint8_t rx_buf[TELEMETRY_MESSAGE_SIZE];
         uint8_t rx_size = 0;
-	    lora_status = lora_receive(rx_buf, LORA_MESSAGE_SIZE, &rx_size);
+	    lora_status = lora_receive(rx_buf, TELEMETRY_MESSAGE_SIZE, &rx_size);
 
-        if( lora_status == LORA_OK && rx_size == LORA_MESSAGE_SIZE )
+        if( lora_status == LORA_OK && rx_size == TELEMETRY_MESSAGE_SIZE )
             {
-            memcpy( &last_lora_message, rx_buf, LORA_MESSAGE_SIZE );
+            memcpy( &last_lora_message, rx_buf, TELEMETRY_MESSAGE_SIZE );
             }
         sequence_number++;
         HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
